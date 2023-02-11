@@ -1,0 +1,22 @@
+{
+    "target": {
+        "name": "wordsearchsolver",
+        "type": "executable",
+        "src_dir": "./"
+    },
+
+    "architectures": ["local"],
+    "os_names": ["local"],
+
+    "obj_dir": "build/obj/",
+    "bin_dir": "build/",
+
+    "bin_name_format": "${target.name}${ext}",
+
+    "dependencies": [
+
+    ],
+    "include_dirs": [
+        "./"
+    ]
+}

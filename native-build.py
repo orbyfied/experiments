@@ -1,4 +1,4 @@
-#!/bin/py
+#!/usr/bin/python3
 
 #
 #
@@ -9,6 +9,7 @@
 
 from json import JSONDecoder
 import os
+import platform
 import subprocess
 import shutil
 from sys import argv
@@ -38,6 +39,7 @@ class BuildState:
     def prepare(self):
         if not os.path.exists(self.obj_dir):
             os.makedirs(self.obj_dir)
+
         if not os.path.exists(self.bin_dir):
             os.makedirs(self.bin_dir)
 
@@ -78,6 +80,26 @@ class BuildState:
 
     def add_project_dir_dependency(self, fn):
         self.dependencies.append("project_dir://" + fn);
+
+    def set_bin_name_format(self, f):
+        self.bin_name_format = f
+
+    def work_dir(self, f):
+        self.work_dir = f
+
+def get_os_name(osNameVal):
+    if osNameVal == 'posix':
+        return 'linux'
+    if osNameVal != 'local':
+        return osNameVal
+    return get_os_name(os.name)
+
+def get_arch_name(archVal):
+    if archVal == 'x86_64':
+        return 'x64'
+    if archVal != 'local':
+        return archVal
+    return get_arch_name(platform.processor())
 
 def get_platform_str(osName, arch):
     return arch + ("-" + osName if osName != None else "")
@@ -150,7 +172,7 @@ def compile_file(state : BuildState, target, filename, osName, arch):
 ################################
 
 LD_EXE   = 'g++'
-LD_FLAGS = '-shared'
+LD_FLAGS = ''
 
 def get_output_file_name(state : BuildState, target : BuildTarget, osName : str, arch):
     # get file extension
@@ -161,7 +183,7 @@ def get_output_file_name(state : BuildState, target : BuildTarget, osName : str,
         else:
             ext = ''
     elif target.type.startswith('lib'):
-        spl  = target.type.split(':')
+        spl = target.type.split(':')
         if len(spl) < 2:
             raise ValueError('Invalid target type: %s' % target) 
         spec = spl[1]
@@ -177,8 +199,24 @@ def get_output_file_name(state : BuildState, target : BuildTarget, osName : str,
                 ext = '.so'
             else:
                 ext = '.dylib'
+
+    platformStr = get_platform_str(osName, arch)
+
     # build final file name
-    return target.name + "-" + get_platform_str(osName, arch) + ext
+    return replace_placeholders(
+        state.bin_name_format,
+
+        # values
+        {
+            "target.name": target.name,
+            "target.type": target.type,
+            "target.srcdir": target.src_dir,
+            "ext": ext,
+            "platform": platformStr,
+            "os": osName,
+            "arch": arch
+        }
+    )
 
 def link_target(state, target, osName, arch):
     # get obj file directory
@@ -191,6 +229,9 @@ def link_target(state, target, osName, arch):
         os.makedirs(state.bin_dir)
     out_file = os.path.join(state.bin_dir, get_output_file_name(state, target, osName, arch))
     flags.append("-o \"" + out_file + "\"")
+    # append shared lib flag
+    if target.type.startswith("lib") and target.type.split(":")[1] == 'dynamic': # todo
+        flags.append("-shared")
     # append all object files
     for of in os.listdir(obj_dir):
         if of.endswith(".o"):
@@ -223,19 +264,17 @@ def link_target(state, target, osName, arch):
 # Build
 ################################
 
-OS_LIST   = [ 'win', 'linux', 'mac' ]
-ARCH_LIST = [ 'x64', 'x86' ]
-
 SRC_FILE_EXTENSIONS = [ 'c', 'cpp', 'cxx', 'cx', 'c++' ]
 
 def compile_all_in(state : BuildState, src_dir : str, osName, arch):
     # for all files in the directory
-    for src_file in os.listdir(src_dir):
+    for sf in os.listdir(src_dir):
+        src_file = os.path.join(src_dir, sf)
         if os.path.isdir(src_file):
             # compile all files in that directory
             compile_all_in(state, src_file, osName, arch)
         else:
-            spl = src_file.split('.')
+            spl = sf.split('.')
             if len(spl) > 1 and spl[1] in SRC_FILE_EXTENSIONS:
                 # compile file
                 code, cmd, _, ofn = compile_file(state, state.target, src_file, osName, arch)
@@ -275,13 +314,15 @@ def build_all(state : BuildState, target : BuildTarget, osNames, archs):
     # for all platforms build
     for arch in archs:
         for osName in osNames:
-            build_all_for(state, osName, arch)
+            realOsName = get_os_name(osName)
+            realArch   = get_arch_name(arch)
+            build_all_for(state, realOsName, realArch)
 
 ################################
 # Main
 ################################
 
-def main_build_json(mdir, jsonfile):
+def main_build_json(mdir, jsonfile, workdir):
     # print
     print("Loading module from '" + jsonfile + "' in '" + mdir + "'")
 
@@ -296,7 +337,7 @@ def main_build_json(mdir, jsonfile):
     pTSrcDir = os.path.join(mdir, fix_path(pTarget["src_dir"]))
     pTName   = pTarget["name"]
     pTType   = pTarget["type"]
-    iTarget = BuildTarget(pTName, pTType, pTSrcDir)
+    iTarget  = BuildTarget(pTName, pTType, pTSrcDir)
 
     pArchs    = json["architectures"]
     pOses     = json["os_names"]
@@ -318,12 +359,30 @@ def main_build_json(mdir, jsonfile):
     iState.set_include_dirs(rInclDirs)
     iState.set_dependencies(rDeps)
     iState.set_target(iTarget)
+    iState.set_bin_name_format(json["bin_name_format"])
+    iState.work_dir(workdir)
 
     # call build
     build_all(iState, iTarget, pOses, pArchs)
 
-def main(args):
-    main_build_json(".", "module.json")
+def main(argv):
+    # CLI
+    ap = ArgParser()
+    ap.add(Arg.new("file", "F", str).default("./module.json"))
+    ap.add(Arg.new("workdir", "W", str).default("<get>"))
+    args = ap.parse_errexit(stitch_args(argv))
+
+    main_json_file = None
+    file_arg = args["file"]
+    if os.path.isdir(file_arg):
+        main_json_file = os.path.join(file_arg, "module.json")
+    else:
+        main_json_file = file_arg
+    workdir = args["workdir"]
+    if workdir == "<get>":
+        workdir = os.path.dirname(main_json_file)
+    main_build_json(workdir, main_json_file, 
+                    workdir=workdir)
 
 if __name__ == '__main__':
     main(argv)

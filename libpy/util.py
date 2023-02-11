@@ -41,20 +41,24 @@ class Reader:
                 return None
             return self.str[idx]
 
-    def collect(self, pred: function):
+    def collect(self, pred):
         str = ""
         while self.current() != None and pred(self.current()):
             str += self.current()
+            self.next()
         return str
 
-    def pcollect(self, pred: function):
+    def pcollect(self, pred):
         while self.current() != None and pred(self.current()):
-            pass
+            self.next()
         return str
 
+# check if the given char is a path sep
 def is_path_sep(char):
     return char == '\\' or char == '/'
 
+# fixes the given path and replaces
+# placeholders in it
 def fix_path(pstr):
     seg      = ""
     segments = []
@@ -85,3 +89,44 @@ def get_idx_by_pos(len, pos):
         return len + pos
     else:
         return pos
+    
+def flat_concat(list):
+    rstr = ""
+    l = len(list)
+    for i in range(0, l):
+        rstr += str(list[i])
+        if i < l - 1:
+            rstr += ", "
+    return rstr
+
+#
+# from: https://stackoverflow.com/questions/2020014/get-fully-qualified-class-name-of-an-object-in-python
+#
+def full_type_name(klass):
+    module = klass.__module__
+    if module == 'builtins':
+        return klass.__qualname__ # avoid outputs like 'builtins.str'
+    return module + '.' + klass.__qualname__
+
+def replace_placeholders(istr: str, vals: dict):
+    reader = Reader(istr)
+    ostr = ""
+    while reader.current():
+        # check for placeholder
+        if reader.current() == '$' and reader.peek(1) == '{':
+            reader.next(2)
+
+            # collect name
+            name = reader.collect(lambda c : c != '}')
+            reader.next() # close brackets
+
+            # replace name
+            val = None
+            if name in vals:
+                val = vals[name]
+            ostr += str(val)
+        else:
+            # append char
+            ostr += reader.current()
+            reader.next()
+    return ostr
